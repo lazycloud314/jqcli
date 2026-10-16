@@ -187,8 +187,26 @@ jqcli --format json auth logout
 - 新建入口：`GET /algorithm/index/new`
 - 保存：`POST /algorithm/index/save`
 - 删除：`POST /algorithm/index/del`
+- 文件夹列表：`POST /algorithm/index/GetFileList?pId=<parent_id>`
+- 创建文件夹：`POST /algorithm/index/AddFile?pId=<parent_id>`
+- 移动策略：`POST /algorithm/index/AlgorithmToFile?ids=<internal_id>&fId=<folder_id>`
 
 注意：聚宽列表页中的 `algorithmId` 可能随请求变化。`jqcli` 会优先使用列表/编辑页当前可用 ID，并在删除等场景按名称回查当前列表项。
+
+### strategy folders / mkdir / mv
+
+按文件夹整理策略，例如将一组对比研究策略归档：
+
+```bash
+jqcli --env-file .env --non-interactive --format json strategy folders
+jqcli --env-file .env --non-interactive --format json strategy mkdir "高股息对比研究"
+jqcli --env-file .env --non-interactive --format json strategy mv <strategy_id> --folder <folder_id>
+jqcli --env-file .env --non-interactive --format json strategy ls --all
+```
+
+`folders` 只列出指定父目录的直接子文件夹，`mkdir` 在该父目录中新建文件夹；两者的 `--parent <id>` 默认值为 `0`（根目录）。同名文件夹不会重复创建。使用 `mkdir` 返回的 `id` 作为 `mv --folder` 的目标，`--folder 0` 可移回根目录。
+
+`mv` 使用平台的移动接口，不保存或复制策略源码，也不创建回测。移动后会重新读取目标目录确认成员；`ls --all` 返回策略的 `folder_id`，根目录策略不含此字段。聚宽的公开 ID 和内部 ID 都可能随请求变化，因此 `mv` 要求策略名称在账号中唯一，用于回查和确认结果。未知策略、无效目录、平台错误或无法确认结果时命令以非零状态退出；请求超时后先查询目录状态，避免盲目重试。
 
 ### strategy ls
 
@@ -1239,7 +1257,7 @@ jqcli --non-interactive --format json research rm "临时/demo.py" --yes
 截至 2026-08-15，已用真实聚宽账号验证：
 
 - `auth login/status/logout/import-cookie`
-- `strategy ls/show/new/edit/rm`
+- `strategy ls/show/new/edit/rm/folders/mkdir/mv`
 - `backtest run/ls/show/rm`
 - `research ls/show`（只读取目录与元数据，不读取或修改文件正文）
 - `research kernelspecs/kernels/sessions`（只汇总数量和可用性；探测时现有内核、会话均为 0）

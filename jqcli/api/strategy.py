@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .client import ApiClient
+from jqcli.errors import ApiError, NotFoundError, UsageError
 
 
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -297,6 +298,95 @@ def get_strategy(client: ApiClient, strategy_id: str, *, include_code: bool = Fa
     if not include_code:
         payload.pop("code", None)
     return payload
+
+
+def _check_folder_response(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ApiError("文件夹接口返回了无效响应")
+    codes = [data[key] for key in ("code", "status") if key in data]
+    if not codes or any(str(code) not in {"00000", "0"} for code in codes):
+        raise ApiError("文件夹操作失败：" + str(data.get("msg") or data.get("message") or "未知状态"))
+    return data
+
+
+def list_strategy_folders(client: ApiClient, *, parent_id: str = "0") -> dict[str, Any]:
+    # Protocol used by std/algorithm/js/list.min.js (Cy.ajax defaults to POST).
+    data = _check_folder_response(client.post(
+        "/algorithm/index/GetFileList", params={"pId": parent_id, "ajax": 1}, data={"ajax": 1},
+    ))
+    inner = data.get("data")
+    if not isinstance(inner, dict) or not isinstance(inner.get("fileArr"), list):
+        raise ApiError("文件夹列表响应缺少 data.fileArr")
+    items = []
+    for folder in inner["fileArr"]:
+        if not isinstance(folder, dict) or not folder.get("fId") or not isinstance(folder.get("name"), str):
+            raise ApiError("文件夹列表包含无效记录")
+        items.append({"id": str(folder["fId"]), "name": folder["name"], "parent_id": parent_id})
+    return {"items": items}
+
+
+def _require_strategy_folder(client: ApiClient, folder_id: str) -> None:
+    if folder_id == "0":
+        return
+    pending = ["0"]
+    seen: set[str] = set()
+    while pending:
+        parent_id = pending.pop(0)
+        if parent_id in seen:
+            continue
+        seen.add(parent_id)
+        for folder in list_strategy_folders(client, parent_id=parent_id)["items"]:
+            if folder["id"] == folder_id:
+                return
+            pending.append(folder["id"])
+    raise NotFoundError("目标策略文件夹不存在")
+
+
+def create_strategy_folder(client: ApiClient, *, name: str, parent_id: str = "0") -> dict[str, Any]:
+    name = name.strip()
+    if not name or re.search(r"[~#^$@%&!?*]", name):
+        raise UsageError("请提供有效文件夹名称，不能含 ~#^$@%&!?* 字符")
+    _require_strategy_folder(client, parent_id)
+    if any(folder["name"] == name for folder in list_strategy_folders(client, parent_id=parent_id)["items"]):
+        raise UsageError("同名文件夹已存在，请使用 strategy folders 查询其 ID")
+    _check_folder_response(client.post(
+        "/algorithm/index/AddFile", params={"pId": parent_id, "ajax": 1}, data={"name": name, "ajax": 1},
+    ))
+    matches = [folder for folder in list_strategy_folders(client, parent_id=parent_id)["items"] if folder["name"] == name]
+    if len(matches) != 1:
+        raise ApiError("创建请求已发送，但无法唯一确认文件夹；请查询列表后再操作")
+    return {"ok": True, **matches[0]}
+
+
+def move_strategy(client: ApiClient, strategy_id: str, *, folder_id: str) -> dict[str, Any]:
+    _require_strategy_folder(client, folder_id)
+    items = list_strategies(client, all_items=True)["items"]
+    matches = [item for item in items if strategy_id in {item.get("id"), item.get("internal_id")}]
+    if not matches:
+        # Public edit IDs can change between requests; resolve an old ID by its
+        # edit-page name, but refuse ambiguous matches or an unknown strategy.
+        detail = get_strategy(client, strategy_id)
+        matches = [item for item in items if detail.get("name") and item["name"] == detail["name"]]
+    if len(matches) != 1:
+        raise NotFoundError("无法唯一确认待移动策略，请刷新 strategy ls 后重试")
+    item = matches[0]
+    if sum(candidate["name"] == item["name"] for candidate in items) != 1:
+        raise UsageError("存在同名策略，无法可靠核实移动结果；请先使用唯一策略名称")
+    internal_id = item.get("internal_id")
+    if not internal_id:
+        raise ApiError("策略列表缺少移动操作需要的内部 ID")
+    if str(item.get("folder_id") or "0") != folder_id:
+        _check_folder_response(client.post(
+            "/algorithm/index/AlgorithmToFile",
+            params={"ids": internal_id, "fId": folder_id, "ajax": 1}, data={"ajax": 1},
+        ))
+    destination = _list_strategy_pages(client, folder_id=None if folder_id == "0" else folder_id)["items"]
+    # Both public and internal encrypted IDs can change between requests.
+    # Only a globally unique name is safe for cross-request confirmation.
+    confirmed = [candidate for candidate in destination if candidate["name"] == item["name"]]
+    if len(confirmed) != 1:
+        raise ApiError("移动请求已发送，但尚未确认目标文件夹成员；请查询列表，避免盲目重试")
+    return {"ok": True, "id": confirmed[0]["id"], "internal_id": confirmed[0].get("internal_id"), "name": item["name"], "folder_id": folder_id}
 
 
 def create_strategy(client: ApiClient, *, name: str, code: str | None, strategy_type: str) -> dict[str, Any]:

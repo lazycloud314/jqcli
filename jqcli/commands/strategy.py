@@ -9,7 +9,10 @@ from rich.console import Console
 from rich.table import Table
 
 from jqcli.api.client import ApiClient
-from jqcli.api.strategy import create_strategy, delete_strategy, get_strategy, list_strategies, update_strategy
+from jqcli.api.strategy import (
+    create_strategy, create_strategy_folder, delete_strategy, get_strategy,
+    list_strategies, list_strategy_folders, move_strategy, update_strategy,
+)
 from jqcli.cli import AppContext
 from jqcli.errors import ConfirmationRequiredError, FileError, NotAuthenticatedError, UsageError
 from jqcli.output import write_json
@@ -125,6 +128,59 @@ def show(app: AppContext, strategy_id: str, show_code: bool, output: str | None,
         click.echo(f"名称: {payload.get('name', '')}")
         if include_code and payload.get("code") is not None and not output:
             click.echo(str(payload["code"]))
+
+
+@strategy_group.command("folders")
+@click.option("--parent", "parent_id", default="0", help="父文件夹 ID，0 表示根目录。")
+@click.pass_obj
+def folders(app: AppContext, parent_id: str) -> None:
+    """列出策略文件夹。"""
+    client = make_client(app)
+    try:
+        payload = list_strategy_folders(client, parent_id=parent_id)
+    finally:
+        close_client(client)
+    if app.json_output:
+        write_json(payload)
+    else:
+        table = Table("ID", "名称", "父文件夹")
+        for item in payload["items"]:
+            table.add_row(item["id"], item["name"], item["parent_id"])
+        Console().print(table)
+
+
+@strategy_group.command("mkdir")
+@click.argument("name")
+@click.option("--parent", "parent_id", default="0", help="父文件夹 ID，0 表示根目录。")
+@click.pass_obj
+def mkdir(app: AppContext, name: str, parent_id: str) -> None:
+    """创建策略文件夹。"""
+    client = make_client(app)
+    try:
+        payload = create_strategy_folder(client, name=name, parent_id=parent_id)
+    finally:
+        close_client(client)
+    if app.json_output:
+        write_json(payload)
+    elif not app.quiet:
+        click.echo(f"文件夹已创建：{payload['name']} ({payload['id']})")
+
+
+@strategy_group.command("mv")
+@click.argument("strategy_id")
+@click.option("--folder", "folder_id", required=True, help="目标文件夹 ID，0 表示根目录。")
+@click.pass_obj
+def mv(app: AppContext, strategy_id: str, folder_id: str) -> None:
+    """移动策略并核实目标文件夹成员，保留策略源码和回测。"""
+    client = make_client(app)
+    try:
+        payload = move_strategy(client, strategy_id, folder_id=folder_id)
+    finally:
+        close_client(client)
+    if app.json_output:
+        write_json(payload)
+    elif not app.quiet:
+        click.echo(f"策略已移动：{payload['name']} → {folder_id}")
 
 
 @strategy_group.command("new")

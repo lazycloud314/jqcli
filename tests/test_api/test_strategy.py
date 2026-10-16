@@ -1,17 +1,22 @@
 from urllib.parse import parse_qs
 
 import httpx
+import pytest
 
 from jqcli.api.client import ApiClient
 from jqcli.api.strategy import (
     create_strategy,
+    create_strategy_folder,
     delete_strategy,
     get_strategy,
     list_strategies,
+    list_strategy_folders,
+    move_strategy,
     parse_strategy_edit_html,
     parse_strategy_list_html,
     update_strategy,
 )
+from jqcli.errors import ApiError, NotFoundError, UsageError
 
 
 def client_with(handler):
@@ -243,3 +248,170 @@ def test_delete_strategy():
 
     assert payload["ok"] is True
     assert seen == ["/algorithm/index/list", "/algorithm/index/del"]
+
+
+def folder_response():
+    return {"code": "00000", "data": {"fileArr": [{"fId": "f1", "name": "对比研究"}]}}
+
+
+def test_list_strategy_folders_uses_frontend_protocol():
+    def handler(request):
+        assert request.method == "POST"
+        assert request.url.path == "/algorithm/index/GetFileList"
+        assert dict(request.url.params) == {"pId": "parent", "ajax": "1"}
+        return httpx.Response(200, json=folder_response())
+
+    assert list_strategy_folders(client_with(handler), parent_id="parent") == {
+        "items": [{"id": "f1", "name": "对比研究", "parent_id": "parent"}],
+    }
+
+
+@pytest.mark.parametrize("response", [
+    {"code": "10001", "msg": "拒绝"},
+    {"code": "00000", "status": 2, "msg": "拒绝"},
+    {"data": {"fileArr": []}},
+    {"code": "00000", "data": {}},
+    {"code": "00000", "data": {"fileArr": [{"name": "missing-id"}]}},
+])
+def test_folders_reject_failed_or_malformed_response(response):
+    with pytest.raises(ApiError):
+        list_strategy_folders(client_with(lambda request: httpx.Response(200, json=response)))
+
+
+def test_create_folder_checks_duplicate_and_verifies_result():
+    created = False
+
+    def handler(request):
+        nonlocal created
+        if request.url.path.endswith("AddFile"):
+            assert request.method == "POST"
+            assert request.url.params["pId"] == "0"
+            assert parse_qs(request.content.decode())["name"] == ["对比研究"]
+            created = True
+            return httpx.Response(200, json={"code": "00000", "data": "f1"})
+        return httpx.Response(200, json=folder_response() if created else {
+            "code": "00000", "data": {"fileArr": []},
+        })
+
+    assert create_strategy_folder(client_with(handler), name="对比研究") == {
+        "ok": True, "id": "f1", "name": "对比研究", "parent_id": "0",
+    }
+
+
+def test_create_folder_refuses_duplicate_without_mutation():
+    def handler(request):
+        assert request.url.path.endswith("GetFileList")
+        return httpx.Response(200, json=folder_response())
+
+    with pytest.raises(UsageError, match="同名"):
+        create_strategy_folder(client_with(handler), name="对比研究")
+
+
+@pytest.mark.parametrize("name", ["", "  ", "bad&name"])
+def test_create_folder_validates_name_before_requests(name):
+    def handler(request):
+        pytest.fail("invalid name must not issue a request")
+
+    with pytest.raises(UsageError):
+        create_strategy_folder(client_with(handler), name=name)
+
+
+def test_move_strategy_uses_internal_id_and_verifies_destination():
+    moved = False
+
+    def handler(request):
+        nonlocal moved
+        if request.url.path.endswith("GetFileList"):
+            return httpx.Response(200, json=folder_response())
+        if request.url.path.endswith("AlgorithmToFile"):
+            assert request.method == "POST"
+            assert request.url.params["ids"] == "internal-2"
+            assert request.url.params["fId"] == "f1"
+            moved = True
+            return httpx.Response(200, json={"code": "00000"})
+        assert request.url.path.endswith("/list")
+        if request.url.params.get("fId"):
+            assert moved
+        return httpx.Response(200, text=STRATEGY_LIST_HTML)
+
+    result = move_strategy(client_with(handler), "edit-2", folder_id="f1")
+    assert result == {"ok": True, "id": "edit-2", "internal_id": "internal-2", "name": "全天候ETF", "folder_id": "f1"}
+    assert moved
+
+
+def test_move_strategy_rejects_unknown_folder_before_mutation():
+    def handler(request):
+        assert request.url.path.endswith("GetFileList")
+        return httpx.Response(200, json={"code": "00000", "data": {"fileArr": []}})
+
+    with pytest.raises(NotFoundError):
+        move_strategy(client_with(handler), "edit-2", folder_id="unknown")
+
+
+def test_move_strategy_rejects_unknown_strategy_before_mutation():
+    def handler(request):
+        if request.url.path.endswith("GetFileList"):
+            return httpx.Response(200, json=folder_response())
+        assert request.url.path.endswith(("/list", "/edit"))
+        return httpx.Response(200, text="<html></html>")
+
+    with pytest.raises(NotFoundError):
+        move_strategy(client_with(handler), "unknown", folder_id="f1")
+
+
+def test_move_strategy_does_not_claim_success_without_confirmation():
+    moved = False
+
+    def handler(request):
+        nonlocal moved
+        if request.url.path.endswith("GetFileList"):
+            return httpx.Response(200, json=folder_response())
+        if request.url.path.endswith("AlgorithmToFile"):
+            moved = True
+            return httpx.Response(200, json={"code": "00000"})
+        return httpx.Response(200, text="" if moved else STRATEGY_LIST_HTML)
+
+    with pytest.raises(ApiError, match="尚未确认"):
+        move_strategy(client_with(handler), "edit-2", folder_id="f1")
+
+
+def test_move_strategy_resolves_stale_edit_id_without_editing_source():
+    def handler(request):
+        if request.url.path.endswith("/edit"):
+            return httpx.Response(200, text=STRATEGY_EDIT_HTML.replace("策略名", "全天候ETF"))
+        if request.url.path.endswith("AlgorithmToFile"):
+            assert request.url.params["ids"] == "internal-2"
+            return httpx.Response(200, json={"code": "00000"})
+        assert request.url.path.endswith("/list")
+        return httpx.Response(200, text=STRATEGY_LIST_HTML)
+
+    assert move_strategy(client_with(handler), "old-edit-id", folder_id="0")["internal_id"] == "internal-2"
+
+
+def test_move_strategy_handles_ids_rotating_after_mutation():
+    moved = False
+
+    def handler(request):
+        nonlocal moved
+        if request.url.path.endswith("GetFileList"):
+            return httpx.Response(200, json=folder_response())
+        if request.url.path.endswith("AlgorithmToFile"):
+            moved = True
+            return httpx.Response(200, json={"code": "00000"})
+        html = STRATEGY_LIST_HTML
+        if moved:
+            html = html.replace("internal-2", "rotated-internal").replace("edit-2", "rotated-edit")
+        return httpx.Response(200, text=html)
+
+    result = move_strategy(client_with(handler), "edit-2", folder_id="f1")
+    assert result["id"] == "rotated-edit"
+    assert result["internal_id"] == "rotated-internal"
+
+
+def test_move_strategy_rejects_duplicate_names_before_mutation():
+    def handler(request):
+        assert request.url.path.endswith("/list")
+        return httpx.Response(200, text=STRATEGY_LIST_HTML.replace("混合策略", "全天候ETF"))
+
+    with pytest.raises(UsageError, match="同名"):
+        move_strategy(client_with(handler), "edit-2", folder_id="0")

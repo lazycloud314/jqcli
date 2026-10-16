@@ -155,3 +155,31 @@ def test_strategy_rm_with_yes(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert json.loads(result.output) == {"ok": True, "id": "s1"}
 
+
+
+def test_strategy_folder_commands(monkeypatch, tmp_path):
+    captured = []
+    monkeypatch.setattr("jqcli.commands.strategy.make_client", lambda app: object())
+
+    def fake_folders(client, **kwargs):
+        captured.append(kwargs)
+        return {"items": [{"id": "f1", "name": "对比研究", "parent_id": "0"}]}
+
+    def fake_mkdir(client, **kwargs):
+        captured.append(kwargs)
+        return {"ok": True, "id": "f1", "name": kwargs["name"]}
+
+    def fake_move(client, strategy_id, **kwargs):
+        captured.append({"strategy_id": strategy_id, **kwargs})
+        return {"ok": True, "id": strategy_id, **kwargs}
+
+    monkeypatch.setattr("jqcli.commands.strategy.list_strategy_folders", fake_folders)
+    monkeypatch.setattr("jqcli.commands.strategy.create_strategy_folder", fake_mkdir)
+    monkeypatch.setattr("jqcli.commands.strategy.move_strategy", fake_move)
+    base = ["--config", str(tmp_path / "c.json"), "--token", "tok", "--non-interactive", "--format", "json", "strategy"]
+    runner = CliRunner()
+    for args in (["folders", "--parent", "f0"], ["mkdir", "对比研究"], ["mv", "s1", "--folder", "f1"]):
+        result = runner.invoke(main, base + args)
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)
+    assert captured == [{"parent_id": "f0"}, {"name": "对比研究", "parent_id": "0"}, {"strategy_id": "s1", "folder_id": "f1"}]
