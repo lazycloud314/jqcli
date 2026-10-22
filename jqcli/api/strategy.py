@@ -6,10 +6,10 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 from .client import ApiClient
-from .diagnostics import page_features, payload_summary
+from .diagnostics import has_login_redirect, page_features, payload_summary
 from jqcli.errors import ApiError, NotAuthenticatedError, NotFoundError, UsageError
 
 
@@ -242,21 +242,26 @@ def _list_strategy_pages(client: ApiClient, *, folder_id: str | None = None) -> 
 
 def _read_strategy_list(client: ApiClient, html: str) -> dict[str, Any]:
     try:
-        return _validated_strategy_list(html, secret_values=client.diagnostic_secrets())
+        return _validated_strategy_list(
+            html, secret_values=client.diagnostic_secrets(), origin_host=urlsplit(client.api_base).hostname,
+        )
     except (ApiError, NotAuthenticatedError) as exc:
         exc.details["http"] = client.last_response_details
         raise
 
 
-def _validated_strategy_list(html: str, *, secret_values: tuple[str, ...] = ()) -> dict[str, Any]:
+def _validated_strategy_list(html: str, *, secret_values: tuple[str, ...] = (), origin_host: str | None = None) -> dict[str, Any]:
     try:
         server_payload = json.loads(html)
     except ValueError:
         pass
     else:
+        details = {"response": payload_summary(server_payload, secret_values=secret_values, origin_host=origin_host)}
+        if has_login_redirect(server_payload, origin_host=origin_host):
+            raise NotAuthenticatedError("策略列表响应要求跳转登录页，当前 Cookie 未获得登录访问权限", details=details)
         raise ApiError(
             "策略列表接口返回了 JSON，未取得策略列表；请查看 details.response 中的服务端错误信息",
-            details={"response": payload_summary(server_payload, secret_values=secret_values)},
+            details=details,
         )
     payload = parse_strategy_list_html(html)
     if payload["items"] or payload.get("folders"):
@@ -336,9 +341,11 @@ def get_strategy(client: ApiClient, strategy_id: str, *, include_code: bool = Fa
 
 def _check_folder_response(data: Any, *, client: ApiClient) -> dict[str, Any]:
     details = {
-        "response": payload_summary(data, secret_values=client.diagnostic_secrets()),
+        "response": payload_summary(data, secret_values=client.diagnostic_secrets(), origin_host=urlsplit(client.api_base).hostname),
         "http": client.last_response_details,
     }
+    if has_login_redirect(data, origin_host=urlsplit(client.api_base).hostname):
+        raise NotAuthenticatedError("文件夹响应要求跳转登录页，当前 Cookie 未获得登录访问权限", details=details)
     if not isinstance(data, dict):
         raise ApiError("文件夹接口返回了无效响应", details=details)
     codes = [data[key] for key in ("code", "status") if key in data]

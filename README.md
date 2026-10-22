@@ -91,6 +91,8 @@ debug 按 `event` 区分阶段：
 
 `auth status` 成功不表示远端登录有效；列表返回无法识别的页面时会报错，而非直接当成零个策略。若 HTTP 200 的正文实际是失败 JSON（即使 Content-Type 写作 `text/html`），`error.details.response` 会包含服务端错误码和脱敏消息，不再按 HTML 列表解析。文件夹状态异常也使用同样的错误摘要；HTTP 错误详情包含 `http` 摘要，连接错误详情包含异常类型链、errno、耗时及 DNS/超时/TLS 等分类，不输出原始异常消息。HTTP 200 的列表页外壳仍可能受平台页面结构变化影响，不能仅凭空列表确认账号没有策略。
 
+失败响应中的 `url`、`redirect`、`redirect_url`、`redirectUrl`、`location`、`login_url`、`loginUrl`、`return_url`、`returnUrl` 也会收集类型和安全分类。仅登录路径白名单可打印 `known_path`，任意路径、URL 用户信息、查询参数和片段均不打印；HTTP `Location` 头同样只做安全分类。若策略/文件夹响应明确要求跳转本站登录页，则返回 `not_authenticated`，不再笼统报 `api_error`；不会仅凭 `10001` 或空 `msg` 推断登录失效。
+
 可将诊断和错误统一收集到文件，stdout 中的成功结果仍单独保留：
 
 ```bash

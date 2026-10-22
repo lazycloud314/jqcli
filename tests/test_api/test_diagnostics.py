@@ -7,9 +7,9 @@ import httpx
 import pytest
 
 from jqcli.api.client import ApiClient
-from jqcli.api.diagnostics import payload_summary, redact_message, response_summary
+from jqcli.api.diagnostics import payload_summary, redact_message, redirect_summary, response_summary
 from jqcli.api.strategy import list_strategies, list_strategy_folders
-from jqcli.errors import ApiError, NetworkError
+from jqcli.errors import ApiError, NetworkError, NotAuthenticatedError
 
 
 @pytest.mark.parametrize("message", [
@@ -190,3 +190,57 @@ def test_request_diagnostics_distinguish_cookiejar_from_cookies_sent(capsys):
     assert events[0]["cookiejar_count"] == 1
     assert events[0]["selected_auth"]["cookie_present"] is False
     assert events[1]["sent_auth"]["cookie_present"] is False
+
+
+def test_json_login_redirect_is_identified_without_empty_message_guessing():
+    payload = {"code": "10001", "status": "1", "msg": "", "url": "/user/login/index?token=private-secret"}
+    with ApiClient("https://example.test", cookie="sid=private-cookie", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=payload, headers={"content-type": "text/html"}),
+    )) as client:
+        with pytest.raises(NotAuthenticatedError) as caught:
+            list_strategies(client)
+    details = caught.value.details
+    assert details["response"]["msg"] == ""
+    assert details["response"]["other_field_count"] == 0
+    assert details["response"]["url"]["known_path"] == "/user/login/index"
+    assert details["response"]["url"]["has_query"] is True
+    assert details["http"]["json"]["url"]["kind"] == "login"
+    assert "private-secret" not in json.dumps(details)
+
+
+@pytest.mark.parametrize("target", [
+    "https://other.test/user/login/index", "javascript:/user/login/index", "/user/login-other", "/other?next=/user/login",
+])
+def test_untrusted_or_non_login_targets_do_not_get_authentication_classification(target):
+    payload = {"code": "10001", "status": "1", "msg": "", "url": target}
+    with ApiClient("https://example.test", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=payload),
+    )) as client:
+        with pytest.raises(ApiError):
+            list_strategies(client)
+
+
+def test_folder_login_redirect_has_same_classification():
+    payload = {"code": "10001", "status": "1", "url": "https://example.test/user/login/index"}
+    with ApiClient("https://example.test", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=payload),
+    )) as client:
+        with pytest.raises(NotAuthenticatedError):
+            list_strategy_folders(client)
+
+
+def test_redirects_do_not_expose_unknown_path_or_sensitive_url_parts():
+    summary = redirect_summary("https://private-user:private-password@example.test/private-path?token=private-token#private-fragment",
+                               origin_host="example.test")
+    assert summary["kind"] == "other"
+    assert summary["scope"] == "same_host"
+    assert "private" not in json.dumps(summary)
+    assert redirect_summary("https://[")["kind"] == "invalid"
+
+
+def test_http_location_is_classified_without_query_or_raw_url():
+    response = httpx.Response(302, headers={"location": "/user/login/index?token=private-secret"},
+                              request=httpx.Request("GET", "https://example.test"))
+    summary = response_summary(response)
+    assert summary["redirect"]["kind"] == "login"
+    assert "private-secret" not in json.dumps(summary)
