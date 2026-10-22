@@ -13,8 +13,8 @@ class JqcliError(Exception):
 
 
 class NotAuthenticatedError(JqcliError):
-    def __init__(self, message: str = "未登录，请先提供 JQCLI_TOKEN/JQCLI_COOKIE 或执行认证命令"):
-        super().__init__(message=message, code="not_authenticated", exit_code=1)
+    def __init__(self, message: str = "未登录，请先提供 JQCLI_TOKEN/JQCLI_COOKIE 或执行认证命令", *, details: dict[str, Any] | None = None):
+        super().__init__(message=message, code="not_authenticated", exit_code=1, details=details or {})
 
 
 class NotFoundError(JqcliError):
@@ -36,8 +36,8 @@ class ApiError(JqcliError):
 
 
 class NetworkError(JqcliError):
-    def __init__(self, message: str = "无法连接到聚宽服务器，请检查网络"):
-        super().__init__(message=message, code="network_error", exit_code=5)
+    def __init__(self, message: str = "无法连接到聚宽服务器，请检查网络", *, details: dict[str, Any] | None = None):
+        super().__init__(message=message, code="network_error", exit_code=5, details=details or {})
 
 
 class FileError(JqcliError):

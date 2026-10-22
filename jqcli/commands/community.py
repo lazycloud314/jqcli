@@ -19,7 +19,7 @@ def community_group() -> None:
 
 
 def make_client(app: AppContext) -> ApiClient:
-    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout)
+    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 
 def make_authenticated_client(app: AppContext) -> ApiClient:

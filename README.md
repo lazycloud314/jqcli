@@ -68,14 +68,24 @@ jqcli [--config <path>]
 jqcli --env-file .env --non-interactive --format json <command>
 ```
 
-策略命令支持使用 `--debug` 输出脱敏响应摘要到 stderr，例如：
+策略、回测、模拟盘、社区和研究命令支持使用 `--debug` 输出脱敏响应摘要到 stderr，例如：
 
 ```bash
 jqcli --non-interactive --format json --debug strategy ls --limit 10
 jqcli --non-interactive --format json --debug strategy folders --parent 0
 ```
 
-摘要只包含 HTTP 状态、响应类型和长度、已知 JSON 字段类型及短数字状态码、列表行数与登录表单等页面特征，不包含请求头、Cookie、token、URL 查询参数、策略源码或响应正文。`auth status` 成功不表示远端登录有效；列表返回无法识别的页面时会报错，而非直接当成零个策略。文件夹状态异常时，`error.details.response` 提供脱敏响应结构，用于区分缺少状态字段和非成功状态。HTTP 200 的列表页外壳仍可能受平台页面结构变化影响，不能仅凭空列表确认账号没有策略。
+摘要包含 HTTP 状态、请求方法、耗时、响应类型和长度、正文 SHA-256、已知 JSON 字段类型及短数字状态码、列表行数与登录表单等页面特征。对于失败 JSON，额外保留脱敏后的 `msg`、`message` 或字符串 `error`（包括空消息），每条最多 500 字符；嵌套错误对象只收集有限层数的已知字段。响应头只收集 `x-request-id`、`x-correlation-id` 和 `traceparent`，不会转储其他头。超过 2 MiB 的正文跳过内容分析。登录命令使用独立登录流程，不在此 debug 范围内。
+
+不会输出 Cookie、Authorization、token、密码、URL 查询参数、策略源码或完整响应正文。消息会移除当前客户端凭据、响应内已识别的敏感字段值及常见凭据赋值，含 HTML 或可识别源码的消息会省略。服务端错误消息属于外部输入，脱敏不能保证识别所有未知形式的个人信息，分享日志前应自行检查。
+
+`auth status` 成功不表示远端登录有效；列表返回无法识别的页面时会报错，而非直接当成零个策略。若 HTTP 200 的正文实际是失败 JSON（即使 Content-Type 写作 `text/html`），`error.details.response` 会包含服务端错误码和脱敏消息，不再按 HTML 列表解析。文件夹状态异常也使用同样的错误摘要；HTTP 错误详情包含 `http` 摘要，连接错误详情包含异常类型链、errno、耗时及 DNS/超时/TLS 等分类，不输出原始异常消息。HTTP 200 的列表页外壳仍可能受平台页面结构变化影响，不能仅凭空列表确认账号没有策略。
+
+可将诊断和错误统一收集到文件，stdout 中的成功结果仍单独保留：
+
+```bash
+jqcli --non-interactive --format json --debug strategy ls --limit 10 2> /tmp/jqcli-strategy-errors.log
+```
 
 JSON 模式下成功结果输出到 stdout；错误输出到 stderr，格式为：
 

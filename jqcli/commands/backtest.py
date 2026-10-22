@@ -38,11 +38,11 @@ def backtest_group() -> None:
 def make_client(app: AppContext) -> ApiClient:
     if not (app.token or app.cookie):
         raise NotAuthenticatedError()
-    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout)
+    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 
 def make_optional_client(app: AppContext) -> ApiClient:
-    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout)
+    return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 
 def close_client(client: object) -> None:

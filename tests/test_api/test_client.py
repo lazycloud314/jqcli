@@ -25,7 +25,7 @@ def test_debug_response_summary_never_echoes_credentials_or_body(capsys):
         return httpx.Response(200, json={
             "status": 401,
             "token": "body-secret",
-            "msg": "private-message",
+            "msg": "请求被拒绝 token=token-secret password=private-password body-secret response-secret",
             "data": {"fileArr": [{"name": "private-strategy"}], "cookie": "private-cookie"},
         }, headers={"set-cookie": "sid=response-secret"})
 
@@ -36,13 +36,14 @@ def test_debug_response_summary_never_echoes_credentials_or_body(capsys):
     assert output.out == ""
     assert all(secret not in output.err for secret in (
         "body-secret", "private-message", "private-strategy", "private-cookie",
-        "response-secret", "token-secret", "cookie-secret", "query-secret",
+            "response-secret", "token-secret", "cookie-secret", "query-secret", "private-password",
     ))
     summary = json.loads(output.err)["debug"]
     assert summary["endpoint"] == "strategy_folders"
     assert summary["http_status"] == 200
     assert summary["json"]["status"] == 401
     assert summary["json"]["data"]["folder_count"] == 1
+    assert "请求被拒绝" in summary["json"]["msg"]
 
 
 def test_debug_html_emits_only_page_features(capsys):

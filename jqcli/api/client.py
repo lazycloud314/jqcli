@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import sys
+import time
 from http.cookiejar import Cookie as JarCookie
 from http.cookies import CookieError, SimpleCookie
 from typing import Any
@@ -11,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from jqcli.errors import ApiError, NetworkError, NotAuthenticatedError, NotFoundError
-from .diagnostics import response_summary
+from .diagnostics import network_summary, response_summary
 
 
 def _cookie_segments(value: str | None) -> list[tuple[str, str]]:
@@ -61,6 +62,7 @@ class ApiClient:
         self.token = token
         self.cookie = cookie
         self.debug = debug
+        self.last_response_details: dict[str, Any] = {}
         self._initial_cookie_header = cookie
         self._shadowed_initial_cookie_names: set[str] = set()
         self._client = httpx.Client(
@@ -115,6 +117,19 @@ class ApiClient:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
 
+    def diagnostic_secrets(self) -> tuple[str, ...]:
+        values = [self.token, self.cookie]
+        for _, segment in _cookie_segments(self.cookie):
+            values.append(segment.partition("=")[2].strip('"'))
+            parsed = SimpleCookie()
+            try:
+                parsed.load(segment)
+            except CookieError:
+                continue
+            values.extend(morsel.value for morsel in parsed.values())
+        values.extend(cookie.value for cookie in self._client.cookies.jar)
+        return tuple(value for value in values if value)
+
     def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         allow_redirect_status = bool(kwargs.pop("_allow_redirect_status", False))
         self._validate_request_target(path)
@@ -125,24 +140,40 @@ class ApiClient:
         if cookie_header:
             headers["Cookie"] = cookie_header
         headers.update(kwargs.pop("headers", {}))
+        started = time.monotonic()
+        self.last_response_details = {}
         try:
             response = self._client.request(method, path, headers=headers, **kwargs)
         except httpx.RequestError as exc:
-            raise NetworkError() from exc
+            details = network_summary(exc, method=method, elapsed_ms=(time.monotonic() - started) * 1000)
+            if self.debug:
+                print(json.dumps({"debug": details}, ensure_ascii=False), file=sys.stderr)
+            raise NetworkError(details=details) from exc
+        secrets_for_response = self.diagnostic_secrets() + tuple(cookie.value for cookie in response.cookies.jar)
+        authorization = response.request.headers.get("authorization", "")
+        if authorization:
+            secrets_for_response += (authorization, authorization.partition(" ")[2])
+        request_cookie = response.request.headers.get("cookie", "")
+        if request_cookie:
+            secrets_for_response += (request_cookie,)
+            secrets_for_response += tuple(segment.partition("=")[2].strip('"') for _, segment in _cookie_segments(request_cookie))
+        self.last_response_details = response_summary(
+            response, secret_values=secrets_for_response, elapsed_ms=(time.monotonic() - started) * 1000,
+        )
         if self.debug:
-            print(json.dumps({"debug": response_summary(response)}, ensure_ascii=False), file=sys.stderr)
+            print(json.dumps({"debug": self.last_response_details}, ensure_ascii=False), file=sys.stderr)
         self._remember_initial_cookie_mutations(response)
         if response.status_code in (401, 403):
-            raise NotAuthenticatedError("登录已过期或凭据无效")
+            raise NotAuthenticatedError("登录已过期或凭据无效", details={"http": self.last_response_details})
         if response.status_code == 404:
-            raise NotFoundError("资源不存在")
+            raise NotFoundError("资源不存在", details={"http": self.last_response_details})
         if 300 <= response.status_code < 400 and not allow_redirect_status:
             location = response.headers.get("location", "").lower()
             if "/user/login" in location or "/hub/login" in location:
-                raise NotAuthenticatedError("登录已过期，请重新执行认证命令")
-            raise ApiError(f"请求返回了意外重定向（HTTP {response.status_code}）", status_code=response.status_code)
+                raise NotAuthenticatedError("登录已过期，请重新执行认证命令", details={"http": self.last_response_details})
+            raise ApiError(f"请求返回了意外重定向（HTTP {response.status_code}）", status_code=response.status_code, details={"http": self.last_response_details})
         if response.status_code >= 400:
-            raise ApiError(f"请求失败（HTTP {response.status_code}）", status_code=response.status_code)
+            raise ApiError(f"请求失败（HTTP {response.status_code}）", status_code=response.status_code, details={"http": self.last_response_details})
         return response
 
     def _cookie_header_for(self, path: str) -> str | None:
@@ -272,7 +303,7 @@ class ApiClient:
         try:
             return response.json()
         except ValueError as exc:
-            raise ApiError("服务端返回了无效 JSON") from exc
+            raise ApiError("服务端返回了无效 JSON", details={"http": self.last_response_details}) from exc
 
     def request_text(self, method: str, path: str, **kwargs: Any) -> str:
         response = self._send(method, path, **kwargs)

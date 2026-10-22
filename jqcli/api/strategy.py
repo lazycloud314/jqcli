@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 from html import unescape
 from html.parser import HTMLParser
@@ -228,18 +229,35 @@ def _listing_params(*, folder_id: str | None = None, page: int | None = None) ->
 
 def _list_strategy_pages(client: ApiClient, *, folder_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
     html = client.get_text("/algorithm/index/list", params=_listing_params(folder_id=folder_id))
-    first_payload = _validated_strategy_list(html)
+    first_payload = _read_strategy_list(client, html)
     items = list(first_payload["items"])
     folders = list(first_payload.get("folders", []))
     for page in range(2, _listing_max_page(html) + 1):
         page_html = client.get_text("/algorithm/index/list", params=_listing_params(folder_id=folder_id, page=page))
-        payload = _validated_strategy_list(page_html)
+        payload = _read_strategy_list(client, page_html)
         items.extend(payload["items"])
         folders.extend(payload.get("folders", []))
     return {"items": items, "folders": folders}
 
 
-def _validated_strategy_list(html: str) -> dict[str, Any]:
+def _read_strategy_list(client: ApiClient, html: str) -> dict[str, Any]:
+    try:
+        return _validated_strategy_list(html, secret_values=client.diagnostic_secrets())
+    except (ApiError, NotAuthenticatedError) as exc:
+        exc.details["http"] = client.last_response_details
+        raise
+
+
+def _validated_strategy_list(html: str, *, secret_values: tuple[str, ...] = ()) -> dict[str, Any]:
+    try:
+        server_payload = json.loads(html)
+    except ValueError:
+        pass
+    else:
+        raise ApiError(
+            "策略列表接口返回了 JSON，未取得策略列表；请查看 details.response 中的服务端错误信息",
+            details={"response": payload_summary(server_payload, secret_values=secret_values)},
+        )
     payload = parse_strategy_list_html(html)
     if payload["items"] or payload.get("folders"):
         return payload
@@ -316,14 +334,18 @@ def get_strategy(client: ApiClient, strategy_id: str, *, include_code: bool = Fa
     return payload
 
 
-def _check_folder_response(data: Any) -> dict[str, Any]:
+def _check_folder_response(data: Any, *, client: ApiClient) -> dict[str, Any]:
+    details = {
+        "response": payload_summary(data, secret_values=client.diagnostic_secrets()),
+        "http": client.last_response_details,
+    }
     if not isinstance(data, dict):
-        raise ApiError("文件夹接口返回了无效响应")
+        raise ApiError("文件夹接口返回了无效响应", details=details)
     codes = [data[key] for key in ("code", "status") if key in data]
     if not codes or any(str(code) not in {"00000", "0"} for code in codes):
         raise ApiError(
-            "文件夹操作失败：" + str(data.get("msg") or data.get("message") or "未识别的响应状态；请查看 details"),
-            details={"response": payload_summary(data)},
+            "文件夹操作失败；请查看 details.response 中的服务端状态及错误消息",
+            details=details,
         )
     return data
 
@@ -332,7 +354,7 @@ def list_strategy_folders(client: ApiClient, *, parent_id: str = "0") -> dict[st
     # Protocol used by std/algorithm/js/list.min.js (Cy.ajax defaults to POST).
     data = _check_folder_response(client.post(
         "/algorithm/index/GetFileList", params={"pId": parent_id, "ajax": 1}, data={"ajax": 1},
-    ))
+    ), client=client)
     inner = data.get("data")
     if not isinstance(inner, dict) or not isinstance(inner.get("fileArr"), list):
         raise ApiError("文件夹列表响应缺少 data.fileArr")
@@ -370,7 +392,7 @@ def create_strategy_folder(client: ApiClient, *, name: str, parent_id: str = "0"
         raise UsageError("同名文件夹已存在，请使用 strategy folders 查询其 ID")
     _check_folder_response(client.post(
         "/algorithm/index/AddFile", params={"pId": parent_id, "ajax": 1}, data={"name": name, "ajax": 1},
-    ))
+    ), client=client)
     matches = [folder for folder in list_strategy_folders(client, parent_id=parent_id)["items"] if folder["name"] == name]
     if len(matches) != 1:
         raise ApiError("创建请求已发送，但无法唯一确认文件夹；请查询列表后再操作")
@@ -398,7 +420,7 @@ def move_strategy(client: ApiClient, strategy_id: str, *, folder_id: str) -> dic
         _check_folder_response(client.post(
             "/algorithm/index/AlgorithmToFile",
             params={"ids": internal_id, "fId": folder_id, "ajax": 1}, data={"ajax": 1},
-        ))
+        ), client=client)
     destination = _list_strategy_pages(client, folder_id=None if folder_id == "0" else folder_id)["items"]
     # Both public and internal encrypted IDs can change between requests.
     # Only a globally unique name is safe for cross-request confirmation.
