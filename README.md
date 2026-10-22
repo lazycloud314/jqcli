@@ -68,6 +68,15 @@ jqcli [--config <path>]
 jqcli --env-file .env --non-interactive --format json <command>
 ```
 
+策略命令支持使用 `--debug` 输出脱敏响应摘要到 stderr，例如：
+
+```bash
+jqcli --non-interactive --format json --debug strategy ls --limit 10
+jqcli --non-interactive --format json --debug strategy folders --parent 0
+```
+
+摘要只包含 HTTP 状态、响应类型和长度、已知 JSON 字段类型及短数字状态码、列表行数与登录表单等页面特征，不包含请求头、Cookie、token、URL 查询参数、策略源码或响应正文。`auth status` 成功不表示远端登录有效；列表返回无法识别的页面时会报错，而非直接当成零个策略。文件夹状态异常时，`error.details.response` 提供脱敏响应结构，用于区分缺少状态字段和非成功状态。HTTP 200 的列表页外壳仍可能受平台页面结构变化影响，不能仅凭空列表确认账号没有策略。
+
 JSON 模式下成功结果输出到 stdout；错误输出到 stderr，格式为：
 
 ```json

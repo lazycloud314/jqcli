@@ -16,7 +16,7 @@ from jqcli.api.strategy import (
     parse_strategy_list_html,
     update_strategy,
 )
-from jqcli.errors import ApiError, NotFoundError, UsageError
+from jqcli.errors import ApiError, NotAuthenticatedError, NotFoundError, UsageError
 
 
 def client_with(handler):
@@ -58,6 +58,8 @@ STRATEGY_EDIT_HTML = """
 </form>
 """
 
+EMPTY_STRATEGY_LIST_HTML = '<script src="/std/algorithm/js/list.min.js?v=1"></script><table></table>'
+
 
 def test_parse_strategy_list_html():
     payload = parse_strategy_list_html(STRATEGY_LIST_HTML)
@@ -97,6 +99,41 @@ def test_list_strategies_requests_real_list_page():
 
     assert len(payload["items"]) == 1
     assert payload["items"][0]["id"] == "41faea7d0299bc92c71364d9cd878259"
+
+
+def test_list_strategies_accepts_empty_known_list_shell():
+    client = client_with(lambda request: httpx.Response(200, text=EMPTY_STRATEGY_LIST_HTML))
+    assert list_strategies(client) == {"items": []}
+
+
+def test_list_strategies_rejects_http_200_login_form():
+    html = '<form action="/user/login"><input type="password" value="secret"></form>'
+    client = client_with(lambda request: httpx.Response(200, text=html))
+    with pytest.raises(NotAuthenticatedError):
+        list_strategies(client)
+
+
+@pytest.mark.parametrize("html", [
+    "",
+    "<html><title>secret</title>Unexpected page</html>",
+    EMPTY_STRATEGY_LIST_HTML + '<a href="/algorithm/index/edit?changed_id=secret">name</a>',
+    '<tr class="algorithm_list"><td>unrecognized record</td></tr>',
+])
+def test_list_strategies_does_not_mistake_unrecognized_pages_for_empty(html):
+    client = client_with(lambda request: httpx.Response(200, text=html))
+    with pytest.raises(ApiError) as caught:
+        list_strategies(client)
+    assert "secret" not in str(caught.value.details)
+    assert "page" in caught.value.details
+
+
+def test_list_strategies_validates_subsequent_pages():
+    first = STRATEGY_LIST_HTML + '<a href="/algorithm/index/list?page=2">2</a>'
+    client = client_with(lambda request: httpx.Response(
+        200, text="<html>unexpected</html>" if request.url.params.get("page") else first,
+    ))
+    with pytest.raises(ApiError):
+        list_strategies(client)
 
 
 def test_list_strategies_can_sort_by_name_and_return_all():
@@ -278,6 +315,23 @@ def test_folders_reject_failed_or_malformed_response(response):
         list_strategy_folders(client_with(lambda request: httpx.Response(200, json=response)))
 
 
+def test_folders_unknown_status_includes_safe_shape():
+    response = {"data": {"fileArr": []}, "token": "secret", "secret-key": "private"}
+    with pytest.raises(ApiError) as caught:
+        list_strategy_folders(client_with(lambda request: httpx.Response(200, json=response)))
+    details = caught.value.details["response"]
+    assert details["other_field_count"] == 2
+    assert details["data"]["folder_count"] == 0
+    assert "secret" not in str(details)
+    assert "private" not in str(details)
+
+
+def test_folders_numeric_error_status_is_visible():
+    with pytest.raises(ApiError) as caught:
+        list_strategy_folders(client_with(lambda request: httpx.Response(200, json={"status": 401})))
+    assert caught.value.details["response"]["status"] == 401
+
+
 def test_create_folder_checks_duplicate_and_verifies_result():
     created = False
 
@@ -353,7 +407,7 @@ def test_move_strategy_rejects_unknown_strategy_before_mutation():
         if request.url.path.endswith("GetFileList"):
             return httpx.Response(200, json=folder_response())
         assert request.url.path.endswith(("/list", "/edit"))
-        return httpx.Response(200, text="<html></html>")
+        return httpx.Response(200, text=EMPTY_STRATEGY_LIST_HTML)
 
     with pytest.raises(NotFoundError):
         move_strategy(client_with(handler), "unknown", folder_id="f1")
@@ -369,7 +423,7 @@ def test_move_strategy_does_not_claim_success_without_confirmation():
         if request.url.path.endswith("AlgorithmToFile"):
             moved = True
             return httpx.Response(200, json={"code": "00000"})
-        return httpx.Response(200, text="" if moved else STRATEGY_LIST_HTML)
+        return httpx.Response(200, text=EMPTY_STRATEGY_LIST_HTML if moved else STRATEGY_LIST_HTML)
 
     with pytest.raises(ApiError, match="尚未确认"):
         move_strategy(client_with(handler), "edit-2", folder_id="f1")

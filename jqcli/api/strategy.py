@@ -8,7 +8,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .client import ApiClient
-from jqcli.errors import ApiError, NotFoundError, UsageError
+from .diagnostics import page_features, payload_summary
+from jqcli.errors import ApiError, NotAuthenticatedError, NotFoundError, UsageError
 
 
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -227,15 +228,30 @@ def _listing_params(*, folder_id: str | None = None, page: int | None = None) ->
 
 def _list_strategy_pages(client: ApiClient, *, folder_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
     html = client.get_text("/algorithm/index/list", params=_listing_params(folder_id=folder_id))
-    first_payload = parse_strategy_list_html(html)
+    first_payload = _validated_strategy_list(html)
     items = list(first_payload["items"])
     folders = list(first_payload.get("folders", []))
     for page in range(2, _listing_max_page(html) + 1):
         page_html = client.get_text("/algorithm/index/list", params=_listing_params(folder_id=folder_id, page=page))
-        payload = parse_strategy_list_html(page_html)
+        payload = _validated_strategy_list(page_html)
         items.extend(payload["items"])
         folders.extend(payload.get("folders", []))
     return {"items": items, "folders": folders}
+
+
+def _validated_strategy_list(html: str) -> dict[str, Any]:
+    payload = parse_strategy_list_html(html)
+    if payload["items"] or payload.get("folders"):
+        return payload
+    features = page_features(html)
+    if features["login_form"] and not features["strategy_list_script"]:
+        raise NotAuthenticatedError("策略列表返回了登录表单，请重新登录")
+    if not features["strategy_list_script"] or features["strategy_rows"] or features["strategy_links"]:
+        raise ApiError(
+            "未识别到有效策略列表，不能判定账号没有策略；请加 --debug 检查脱敏响应信息",
+            details={"page": features},
+        )
+    return payload
 
 
 def list_strategies(client: ApiClient, *, sort: str = "updated", limit: int = 50, all_items: bool = False) -> dict[str, Any]:
@@ -305,7 +321,10 @@ def _check_folder_response(data: Any) -> dict[str, Any]:
         raise ApiError("文件夹接口返回了无效响应")
     codes = [data[key] for key in ("code", "status") if key in data]
     if not codes or any(str(code) not in {"00000", "0"} for code in codes):
-        raise ApiError("文件夹操作失败：" + str(data.get("msg") or data.get("message") or "未知状态"))
+        raise ApiError(
+            "文件夹操作失败：" + str(data.get("msg") or data.get("message") or "未识别的响应状态；请查看 details"),
+            details={"response": payload_summary(data)},
+        )
     return data
 
 

@@ -1,7 +1,9 @@
 import json
 
+import httpx
 from click.testing import CliRunner
 
+from jqcli.api.client import ApiClient
 from jqcli.cli import main
 
 
@@ -16,6 +18,26 @@ def test_strategy_ls_json(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert json.loads(result.output) == {"items": [{"id": "s1"}]}
+
+
+def test_strategy_debug_reports_unknown_page_without_false_empty_list(monkeypatch, tmp_path):
+    def make_client(api_base, **kwargs):
+        return ApiClient(api_base, **kwargs, transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text="<html>private body</html>"),
+        ))
+
+    monkeypatch.setattr("jqcli.commands.strategy.ApiClient", make_client)
+    result = CliRunner().invoke(main, [
+        "--config", str(tmp_path / "c.json"), "--env-file", "/dev/null",
+        "--token", "private-token", "--format", "json", "--debug", "strategy", "ls",
+    ])
+    assert result.exit_code == 4
+    lines = result.stderr.splitlines()
+    assert json.loads(lines[0])["debug"]["http_status"] == 200
+    assert json.loads("\n".join(lines[1:]))["error"]["code"] == "api_error"
+    assert "private body" not in result.output
+    assert "private-token" not in result.output
+    assert result.stdout == ""
 
 
 def test_strategy_requires_auth(tmp_path):

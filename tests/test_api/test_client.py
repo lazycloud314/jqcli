@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -16,6 +18,48 @@ def test_client_adds_auth_header():
 
     client = make_client(handler)
     assert client.get("/ping") == {"ok": True}
+
+
+def test_debug_response_summary_never_echoes_credentials_or_body(capsys):
+    def handler(request):
+        return httpx.Response(200, json={
+            "status": 401,
+            "token": "body-secret",
+            "msg": "private-message",
+            "data": {"fileArr": [{"name": "private-strategy"}], "cookie": "private-cookie"},
+        }, headers={"set-cookie": "sid=response-secret"})
+
+    with ApiClient("https://example.test", token="token-secret", cookie="sid=cookie-secret",
+                   debug=True, transport=httpx.MockTransport(handler)) as client:
+        client.get("/algorithm/index/GetFileList?token=query-secret")
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert all(secret not in output.err for secret in (
+        "body-secret", "private-message", "private-strategy", "private-cookie",
+        "response-secret", "token-secret", "cookie-secret", "query-secret",
+    ))
+    summary = json.loads(output.err)["debug"]
+    assert summary["endpoint"] == "strategy_folders"
+    assert summary["http_status"] == 200
+    assert summary["json"]["status"] == 401
+    assert summary["json"]["data"]["folder_count"] == 1
+
+
+def test_debug_html_emits_only_page_features(capsys):
+    html = '<title>private title</title><form action="/user/login"><input type="password" value="secret"></form>'
+    with ApiClient("https://example.test", debug=True,
+                   transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html))) as client:
+        client.get_text("/algorithm/index/list")
+    output = capsys.readouterr().err
+    assert "private title" not in output
+    assert "secret" not in output
+    assert json.loads(output)["debug"]["page"]["login_form"] is True
+
+
+def test_debug_is_silent_by_default(capsys):
+    client = make_client(lambda request: httpx.Response(200, json={"status": 0}))
+    client.get("/ping")
+    assert capsys.readouterr().err == ""
 
 
 def test_client_sends_configured_cookie():

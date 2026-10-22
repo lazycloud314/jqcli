@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import secrets
+import sys
 from http.cookiejar import Cookie as JarCookie
 from http.cookies import CookieError, SimpleCookie
 from typing import Any
@@ -9,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from jqcli.errors import ApiError, NetworkError, NotAuthenticatedError, NotFoundError
+from .diagnostics import response_summary
 
 
 def _cookie_segments(value: str | None) -> list[tuple[str, str]]:
@@ -52,10 +55,12 @@ class ApiClient:
         cookie: str | None = None,
         timeout: float = 30,
         transport: httpx.BaseTransport | None = None,
+        debug: bool = False,
     ) -> None:
         self.api_base = api_base.rstrip("/")
         self.token = token
         self.cookie = cookie
+        self.debug = debug
         self._initial_cookie_header = cookie
         self._shadowed_initial_cookie_names: set[str] = set()
         self._client = httpx.Client(
@@ -124,6 +129,8 @@ class ApiClient:
             response = self._client.request(method, path, headers=headers, **kwargs)
         except httpx.RequestError as exc:
             raise NetworkError() from exc
+        if self.debug:
+            print(json.dumps({"debug": response_summary(response)}, ensure_ascii=False), file=sys.stderr)
         self._remember_initial_cookie_mutations(response)
         if response.status_code in (401, 403):
             raise NotAuthenticatedError("登录已过期或凭据无效")
