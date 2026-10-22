@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
+import sys
 
 import click
 
@@ -64,7 +67,8 @@ def main(
     timeout: float | None,
 ) -> None:
     """聚宽策略、回测、模拟盘与研究工作区管理命令行工具。"""
-    load_env_file(env_file)
+    env_before = {key: bool(os.environ.get(key)) for key in ("JQCLI_TOKEN", "JQCLI_COOKIE")}
+    loaded_env = load_env_file(env_file)
     config = load_config(config_path)
     resolved_token, resolved_cookie = resolve_credentials(config, token=token, cookie=cookie)
     ctx.obj = AppContext(
@@ -78,6 +82,14 @@ def main(
         debug=debug,
         timeout=timeout if timeout is not None else config.timeout,
     )
+    if debug:
+        from .runtime_debug import runtime_summary
+        summary = runtime_summary(
+            config=config, env_file=env_file, loaded_env=loaded_env, env_before=env_before,
+            cli_token=token, cli_cookie=cookie, token=resolved_token, cookie=resolved_cookie,
+            api_base=ctx.obj.api_base, timeout=ctx.obj.timeout,
+        )
+        print(json.dumps({"debug": summary}, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
 from .commands.auth import auth_group

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 
 import click
 
 from jqcli.api.auth import login_with_password
+from jqcli.api.diagnostics import credential_fingerprint
 from jqcli.cli import AppContext
 from jqcli.config import resolve_login_credentials
 from jqcli.errors import UsageError
@@ -89,6 +92,16 @@ def login(app: AppContext, username: str | None, password_stdin: bool) -> None:
     app.config.data["cookie"] = result["cookie"]
     app.config.data.pop("password_login_pending", None)
     app.config.save()
+    if app.debug:
+        print(json.dumps({"debug": {
+            "event": "login_saved",
+            "config_write_path": str(app.config.path.resolve()),
+            "saved_cookie_present": bool(app.config.cookie),
+            "saved_cookie_fingerprint": credential_fingerprint(app.config.cookie),
+            "saved_token_present": bool(app.config.token),
+            "environment_cookie_overrides_saved_cookie": bool(os.environ.get("JQCLI_COOKIE")),
+            "environment_token_present": bool(os.environ.get("JQCLI_TOKEN")),
+        }}, ensure_ascii=False), file=sys.stderr, flush=True)
     if app.json_output:
         write_json({"ok": True, "username": username, "credential": "cookie"})
     elif not app.quiet:

@@ -33,8 +33,10 @@ def test_strategy_debug_reports_unknown_page_without_false_empty_list(monkeypatc
     ])
     assert result.exit_code == 4
     lines = result.stderr.splitlines()
-    assert json.loads(lines[0])["debug"]["http_status"] == 200
-    assert json.loads("\n".join(lines[1:]))["error"]["code"] == "api_error"
+    assert json.loads(lines[0])["debug"]["event"] == "runtime"
+    assert json.loads(lines[1])["debug"]["event"] == "request"
+    assert json.loads(lines[2])["debug"]["http_status"] == 200
+    assert json.loads("\n".join(lines[3:]))["error"]["code"] == "api_error"
     assert "private body" not in result.output
     assert "private-token" not in result.output
     assert result.stdout == ""

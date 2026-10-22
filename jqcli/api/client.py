@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from jqcli.errors import ApiError, NetworkError, NotAuthenticatedError, NotFoundError
-from .diagnostics import network_summary, response_summary
+from .diagnostics import credential_fingerprint, endpoint_label, network_summary, response_summary
 
 
 def _cookie_segments(value: str | None) -> list[tuple[str, str]]:
@@ -63,6 +63,8 @@ class ApiClient:
         self.cookie = cookie
         self.debug = debug
         self.last_response_details: dict[str, Any] = {}
+        self._diagnostic_client_id = secrets.token_hex(4)
+        self._request_sequence = 0
         self._initial_cookie_header = cookie
         self._shadowed_initial_cookie_names: set[str] = set()
         self._client = httpx.Client(
@@ -130,6 +132,27 @@ class ApiClient:
         values.extend(cookie.value for cookie in self._client.cookies.jar)
         return tuple(value for value in values if value)
 
+    def _auth_diagnostics(self, headers: Any) -> dict[str, Any]:
+        headers = httpx.Headers(headers)
+        cookie = headers.get("cookie", "")
+        authorization = headers.get("authorization", "")
+        pairs = _cookie_segments(cookie)
+        names = [name for name, _ in pairs]
+        scheme = authorization.partition(" ")[0].lower()
+        return {
+            "cookie_present": bool(cookie),
+            "cookie_pair_count": len(pairs),
+            "duplicate_cookie_name_count": len(names) - len(set(names)),
+            "cookie_header_bytes": len(cookie.encode("utf-8")),
+            "cookie_fingerprint": credential_fingerprint(cookie),
+            "cookie_format_recognized": bool(pairs) if cookie else None,
+            "authorization_present": bool(authorization),
+            "authorization_scheme": scheme if scheme in {"bearer", "basic"} else "other" if scheme else None,
+            "authorization_fingerprint": credential_fingerprint(authorization),
+            "both_cookie_and_authorization": bool(cookie and authorization),
+            "xsrf_header_present": any(name in headers for name in ("x-xsrftoken", "x-csrftoken", "x-csrf-token")),
+        }
+
     def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         allow_redirect_status = bool(kwargs.pop("_allow_redirect_status", False))
         self._validate_request_target(path)
@@ -140,14 +163,29 @@ class ApiClient:
         if cookie_header:
             headers["Cookie"] = cookie_header
         headers.update(kwargs.pop("headers", {}))
+        self._request_sequence += 1
+        request_id = "%s:%s" % (self._diagnostic_client_id, self._request_sequence)
+        selected_auth = self._auth_diagnostics(headers)
+        if self.debug:
+            print(json.dumps({"debug": {
+                "event": "request", "request_id": request_id,
+                "endpoint": endpoint_label(path), "method": method,
+                "api_host": self._client.base_url.host,
+                "selected_auth": selected_auth,
+                "cookiejar_count": len(self._client.cookies.jar),
+                "expired_cookiejar_count": sum(cookie.is_expired() for cookie in self._client.cookies.jar),
+                "httpx_trust_env": False,
+            }}, ensure_ascii=False), file=sys.stderr, flush=True)
         started = time.monotonic()
         self.last_response_details = {}
         try:
             response = self._client.request(method, path, headers=headers, **kwargs)
         except httpx.RequestError as exc:
             details = network_summary(exc, method=method, elapsed_ms=(time.monotonic() - started) * 1000)
+            details.update({"event": "network_error", "request_id": request_id,
+                            "endpoint": endpoint_label(path), "selected_auth": selected_auth})
             if self.debug:
-                print(json.dumps({"debug": details}, ensure_ascii=False), file=sys.stderr)
+                print(json.dumps({"debug": details}, ensure_ascii=False), file=sys.stderr, flush=True)
             raise NetworkError(details=details) from exc
         secrets_for_response = self.diagnostic_secrets() + tuple(cookie.value for cookie in response.cookies.jar)
         authorization = response.request.headers.get("authorization", "")
@@ -160,9 +198,17 @@ class ApiClient:
         self.last_response_details = response_summary(
             response, secret_values=secrets_for_response, elapsed_ms=(time.monotonic() - started) * 1000,
         )
-        if self.debug:
-            print(json.dumps({"debug": self.last_response_details}, ensure_ascii=False), file=sys.stderr)
         self._remember_initial_cookie_mutations(response)
+        self.last_response_details.update({
+            "event": "response", "request_id": request_id,
+            "sent_auth": self._auth_diagnostics(response.request.headers),
+            "response_cookie_count": len(response.cookies.jar),
+            "cookiejar_count_after": len(self._client.cookies.jar),
+            "imported_cookie_names_shadowed": len(self._shadowed_initial_cookie_names),
+            "cookies_persisted_to_config": False,
+        })
+        if self.debug:
+            print(json.dumps({"debug": self.last_response_details}, ensure_ascii=False), file=sys.stderr, flush=True)
         if response.status_code in (401, 403):
             raise NotAuthenticatedError("登录已过期或凭据无效", details={"http": self.last_response_details})
         if response.status_code == 404:

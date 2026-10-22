@@ -38,7 +38,7 @@ def test_debug_response_summary_never_echoes_credentials_or_body(capsys):
         "body-secret", "private-message", "private-strategy", "private-cookie",
             "response-secret", "token-secret", "cookie-secret", "query-secret", "private-password",
     ))
-    summary = json.loads(output.err)["debug"]
+    summary = json.loads(output.err.splitlines()[-1])["debug"]
     assert summary["endpoint"] == "strategy_folders"
     assert summary["http_status"] == 200
     assert summary["json"]["status"] == 401
@@ -54,7 +54,7 @@ def test_debug_html_emits_only_page_features(capsys):
     output = capsys.readouterr().err
     assert "private title" not in output
     assert "secret" not in output
-    assert json.loads(output)["debug"]["page"]["login_form"] is True
+    assert json.loads(output.splitlines()[-1])["debug"]["page"]["login_form"] is True
 
 
 def test_debug_is_silent_by_default(capsys):

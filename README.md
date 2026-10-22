@@ -68,14 +68,24 @@ jqcli [--config <path>]
 jqcli --env-file .env --non-interactive --format json <command>
 ```
 
-策略、回测、模拟盘、社区和研究命令支持使用 `--debug` 输出脱敏响应摘要到 stderr，例如：
+使用 `--debug` 可在 stderr 查看本地启动配置，以及策略、回测、模拟盘、社区和研究命令的请求/响应过程，例如：
 
 ```bash
 jqcli --non-interactive --format json --debug strategy ls --limit 10
 jqcli --non-interactive --format json --debug strategy folders --parent 0
 ```
 
-摘要包含 HTTP 状态、请求方法、耗时、响应类型和长度、正文 SHA-256、已知 JSON 字段类型及短数字状态码、列表行数与登录表单等页面特征。对于失败 JSON，额外保留脱敏后的 `msg`、`message` 或字符串 `error`（包括空消息），每条最多 500 字符；嵌套错误对象只收集有限层数的已知字段。响应头只收集 `x-request-id`、`x-correlation-id` 和 `traceparent`，不会转储其他头。超过 2 MiB 的正文跳过内容分析。登录命令使用独立登录流程，不在此 debug 范围内。
+debug 按 `event` 区分阶段：
+
+- `runtime`：Python/包版本、实际加载的代码目录和文件哈希、当前目录、实际读取与保存配置的路径、env 文件路径，以及 token/Cookie 各自来源。来源区分进程环境、env 文件、命令参数和配置文件；同时提示是否存在两种凭据，以及是否设置了不会被 HTTPX 使用的代理环境变量。
+- `request`：在联网前打印请求序号、方法、目标主机、接口标签、将使用的认证方式、Cookie 数量/长度/重复名称数、cookie jar 中的数量和过期数量。不会输出 Cookie 名称或值。
+- `response`：相同请求序号、实际请求携带的认证摘要、HTTP 响应和服务端消息、响应 Cookie 数量及当前进程中 Cookie 更新情况。`cookies_persisted_to_config=false` 表示普通请求收到的 Cookie 没有写回磁盘配置。
+- `network_error`：对应请求序号、联网前选择的认证摘要和底层异常分类；没有收到响应时不会伪造 `response`。
+- `login_saved`：用户执行 `auth login` 后，新 Cookie 是否已保存、是否仍保留 token，以及环境变量是否会覆盖新保存的 Cookie。登录 HTTP 流程本身仍独立于普通 API 请求日志。
+
+凭据仅打印带固定前缀的截短 SHA-256 指纹，以比较两台机器或两次运行中是否选择了完全相同的凭据字节。指纹不能用于登录，也不能证明凭据有效；Cookie 头中任何部分变化都会改变指纹，不同指纹不等于不同账号。指纹及本地路径仍属于可关联的诊断信息，分享前可自行移除。
+
+响应摘要包含 HTTP 状态、请求方法、耗时、响应类型和长度、正文 SHA-256、已知 JSON 字段类型及短数字状态码、列表行数与登录表单等页面特征。对于失败 JSON，额外保留脱敏后的 `msg`、`message` 或字符串 `error`（包括空消息），每条最多 500 字符；嵌套错误对象只收集有限层数的已知字段。响应头只收集 `x-request-id`、`x-correlation-id` 和 `traceparent`，不会转储其他头。超过 2 MiB 的正文跳过内容分析。
 
 不会输出 Cookie、Authorization、token、密码、URL 查询参数、策略源码或完整响应正文。消息会移除当前客户端凭据、响应内已识别的敏感字段值及常见凭据赋值，含 HTML 或可识别源码的消息会省略。服务端错误消息属于外部输入，脱敏不能保证识别所有未知形式的个人信息，分享日志前应自行检查。
 

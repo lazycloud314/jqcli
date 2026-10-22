@@ -79,6 +79,7 @@ def load_env_file(path: str | Path | None = None, *, override: bool = False) -> 
 class Config:
     path: Path
     data: dict[str, Any]
+    read_path: Path | None = None
 
     @property
     def api_base(self) -> str:
@@ -119,7 +120,7 @@ def load_config(path: str | Path | None = None) -> Config:
         raise FileError(f"无法读取配置文件 {read_path}") from exc
     if not isinstance(data, dict):
         raise FileError(f"配置文件 {read_path} 格式错误")
-    return Config(path=config_path, data=data)
+    return Config(path=config_path, data=data, read_path=read_path)
 
 
 def resolve_credentials(config: Config, token: str | None = None, cookie: str | None = None) -> tuple[str | None, str | None]:

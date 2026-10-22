@@ -122,3 +122,27 @@ def test_auth_status_reads_token_from_env_file(tmp_path):
 
     assert result.exit_code == 0
     assert json.loads(result.output)["authenticated"] is True
+
+
+def test_login_debug_reports_saved_cookie_and_override_risks(monkeypatch, tmp_path):
+    def fake_login(api_base, username, password, timeout=30):
+        return {"payload": {"code": "00000"}, "cookie": "sid=new-private-cookie"}
+    monkeypatch.setattr("jqcli.commands.auth.login_with_password", fake_login)
+    monkeypatch.setenv("JQCLI_COOKIE", "sid=old-private-cookie")
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"token": "old-private-token"}))
+    result = CliRunner().invoke(main, [
+        "--config", str(config), "--env-file", "/dev/null", "--format", "json", "--debug",
+        "auth", "login", "--username", "private-user", "--password-stdin",
+    ], input="private-password")
+    assert result.exit_code == 0
+    events = [json.loads(line)["debug"] for line in result.stderr.splitlines()]
+    assert [event["event"] for event in events] == ["runtime", "login_saved"]
+    saved = events[1]
+    assert saved["saved_cookie_present"] is True
+    assert saved["saved_token_present"] is True
+    assert saved["environment_cookie_overrides_saved_cookie"] is True
+    assert saved["saved_cookie_fingerprint"] != events[0]["credentials"]["cookie"]["fingerprint"]
+    assert all(value not in result.stderr for value in (
+        "new-private-cookie", "old-private-cookie", "old-private-token", "private-user", "private-password",
+    ))

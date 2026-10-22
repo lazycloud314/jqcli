@@ -8,6 +8,20 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
+def credential_fingerprint(value: str | None) -> str | None:
+    """Compare exact credential bytes across runs without logging credentials."""
+    if not value:
+        return None
+    return "sha256:" + hashlib.sha256(("jqcli-diagnostic-v1\0" + value).encode("utf-8")).hexdigest()[:16]
+
+
+def endpoint_label(url: str) -> str:
+    return {
+        "/algorithm/index/list": "strategy_list",
+        "/algorithm/index/GetFileList": "strategy_folders",
+    }.get(urlsplit(url).path, "other")
+
+
 def _payload_secrets(payload: Any) -> tuple[str, ...]:
     values = []
     pending = [(payload, 0)]
@@ -132,11 +146,7 @@ def payload_summary(
 
 def response_summary(response: Any, *, secret_values: tuple[str, ...] = (), elapsed_ms: float | None = None) -> dict[str, Any]:
     # Never emit URL queries, user info, redirects, cookies, titles, or raw body text.
-    path = urlsplit(str(response.request.url)).path
-    endpoint = {
-        "/algorithm/index/list": "strategy_list",
-        "/algorithm/index/GetFileList": "strategy_folders",
-    }.get(path, "other")
+    endpoint = endpoint_label(str(response.request.url))
     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower().strip()
     if content_type not in {"application/json", "text/html", "text/plain"}:
         content_type = "other_or_missing"

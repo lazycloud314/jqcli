@@ -150,6 +150,43 @@ def test_command_clients_emit_requested_debug(module_name, factory_name, monkeyp
     with getattr(module, factory_name)(app) as client:
         client.get("/test")
     output = capsys.readouterr().err
-    assert json.loads(output)["debug"]["json"]["msg"] == "请求失败"
+    assert json.loads(output.splitlines()[-1])["debug"]["json"]["msg"] == "请求失败"
     assert "private-token" not in output
     assert "private-cookie" not in output
+
+
+def test_request_events_correlate_auth_and_cookie_rotation(capsys):
+    seen = []
+    def handler(request):
+        seen.append(request.headers["cookie"])
+        return httpx.Response(200, json={"status": 0}, headers={"set-cookie": "sid=rotated-secret; Path=/"})
+    with ApiClient("https://example.test", token="private-token", cookie="sid=initial-secret", debug=True,
+                   transport=httpx.MockTransport(handler)) as client:
+        client.get("/first")
+        client.get("/second")
+    output = capsys.readouterr().err
+    events = [json.loads(line)["debug"] for line in output.splitlines()]
+    assert [event["event"] for event in events] == ["request", "response", "request", "response"]
+    assert events[0]["request_id"] == events[1]["request_id"]
+    assert events[2]["request_id"] == events[3]["request_id"]
+    assert events[0]["request_id"] != events[2]["request_id"]
+    assert events[0]["selected_auth"]["both_cookie_and_authorization"] is True
+    assert events[1]["sent_auth"]["cookie_pair_count"] == 1
+    assert events[1]["response_cookie_count"] == 1
+    assert events[1]["cookies_persisted_to_config"] is False
+    assert events[0]["selected_auth"]["cookie_fingerprint"] != events[2]["selected_auth"]["cookie_fingerprint"]
+    assert seen == ["sid=initial-secret", "sid=rotated-secret"]
+    assert all(secret not in output for secret in ("initial-secret", "rotated-secret", "private-token"))
+
+
+def test_request_diagnostics_distinguish_cookiejar_from_cookies_sent(capsys):
+    def handler(request):
+        assert "cookie" not in request.headers
+        return httpx.Response(200, json={"status": 0})
+    with ApiClient("https://example.test", debug=True, transport=httpx.MockTransport(handler)) as client:
+        client._client.cookies.set("sid", "private-value", domain="other.test")
+        client.get("/test")
+    events = [json.loads(line)["debug"] for line in capsys.readouterr().err.splitlines()]
+    assert events[0]["cookiejar_count"] == 1
+    assert events[0]["selected_auth"]["cookie_present"] is False
+    assert events[1]["sent_auth"]["cookie_present"] is False
