@@ -194,6 +194,7 @@ def test_backtest_show_json(monkeypatch, tmp_path):
 
 def test_backtest_stats_json(monkeypatch, tmp_path):
     monkeypatch.setattr("jqcli.commands.backtest.make_client", lambda app: object())
+    monkeypatch.setattr("jqcli.commands.backtest.make_optional_client", lambda app: object())
     monkeypatch.setattr(
         "jqcli.commands.backtest.get_backtest_stats",
         lambda client, backtest_id: {"id": backtest_id, "metrics": {"annual_algo_return": 0.3}},
@@ -211,6 +212,7 @@ def test_backtest_stats_json(monkeypatch, tmp_path):
 def test_backtest_result_json(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr("jqcli.commands.backtest.make_client", lambda app: object())
+    monkeypatch.setattr("jqcli.commands.backtest.make_optional_client", lambda app: object())
 
     def fake_result(client, backtest_id, **kwargs):
         captured["backtest_id"] = backtest_id

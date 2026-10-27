@@ -24,6 +24,7 @@ class AppContext:
     quiet: bool
     debug: bool
     timeout: float
+    authentication_checked: bool = False
 
     @property
     def json_output(self) -> bool:

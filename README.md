@@ -40,6 +40,14 @@ JQCLI_COOKIE=your_cookie
 3. 本地配置文件中保存的 `token` / `cookie`
 4. `auth login` 使用 `JQCLI_USERNAME` / `JQCLI_PASSWORD` 或 stdin 密码登录后保存 cookie
 
+**自动校验与登录**：策略、回测、模拟盘、研究，以及携带凭据的社区查询，在执行业务请求前会通过受保护的策略列表页做一次只读在线校验。该校验仅请求首页，不遍历策略文件夹或输出策略内容。有 Cookie 时独立校验并使用 Cookie，避免同时配置的旧 Bearer token 干扰；只有 token 时仍可校验并使用 token，研究接口则必须取得 Cookie。
+
+凭据缺失或服务器明确要求重新登录时，如果已经配置 `JQCLI_USERNAME` 和 `JQCLI_PASSWORD`，命令会自动进行一次密码登录；用户名也可复用配置文件中上次登录保存的值。新 Cookie 复验通过后写入配置，并继续原命令。自动登录不会读取 stdin，因此不影响 `research exec --code-stdin`。缺少账号密码、登录失败或复验失败时直接报错；网络、无法识别的响应或平台错误不会触发密码登录。已开始执行的业务操作不会自动重放，避免重复创建策略或提交回测。
+
+成功登录会记住被替换 Cookie 的 SHA-256 指纹（最多16条，不额外保存旧 Cookie）。后续如果环境变量或 `--cookie` 仍提供完全相同的旧值，会使用配置中新保存的 Cookie；未被替换的新值仍遵循上面的优先级。配置文件保留已有 token，但使用有效 Cookie 的业务命令不再同时发送该 token。CLI 不会修改 `.env` 或父进程的环境变量。
+
+帮助、版本信息及本地认证管理命令不会触发自动登录；`auth status --live` 可显式在线校验并在必要时自动登录。公开社区或共享回测查询未配置任何凭据及完整账号密码时，仍可匿名调用。本地 Web 服务的 HTTP 路由不属于这次 CLI 自动校验流程。
+
 默认配置文件路径：
 
 ```text
@@ -77,7 +85,7 @@ jqcli --non-interactive --format json --debug strategy folders --parent 0
 
 debug 按 `event` 区分阶段：
 
-- `runtime`：Python/包版本、实际加载的代码目录和文件哈希、当前目录、实际读取与保存配置的路径、env 文件路径，以及 token/Cookie 各自来源。来源区分进程环境、env 文件、命令参数和配置文件；同时提示是否存在两种凭据，以及是否设置了不会被 HTTPX 使用的代理环境变量。
+- `runtime`：Python/包版本、实际加载的代码目录和文件哈希、当前目录、实际读取与保存配置的路径、env 文件路径，以及 token/Cookie 各自来源。来源区分进程环境、env 文件、命令参数和配置文件；`refreshed_config_file` 表示忽略已被登录替换的旧 Cookie，实际使用刷新后的配置值。同时提示是否存在两种凭据，以及是否设置了不会被 HTTPX 使用的代理环境变量。
 - `request`：在联网前打印请求序号、方法、目标主机、接口标签、将使用的认证方式、Cookie 数量/长度/重复名称数、cookie jar 中的数量和过期数量。不会输出 Cookie 名称或值。
 - `response`：相同请求序号、实际请求携带的认证摘要、HTTP 响应和服务端消息、响应 Cookie 数量及当前进程中 Cookie 更新情况。`cookies_persisted_to_config=false` 表示普通请求收到的 Cookie 没有写回磁盘配置。
 - `network_error`：对应请求序号、联网前选择的认证摘要和底层异常分类；没有收到响应时不会伪造 `response`。
@@ -115,10 +123,11 @@ JSON 模式下成功结果输出到 stdout；错误输出到 stderr，格式为�
 
 ### auth status
 
-检查本地是否已有可用凭据。该命令只检查配置/环境变量，不会远程校验 cookie 是否过期。
+默认检查本地是否已有凭据；加 `--live` 时会在线验证，并在 Cookie 失效且已配置账号密码时自动登录。网络或认证失败返回非零退出码。
 
 ```bash
 jqcli --format json auth status
+jqcli --env-file .env --non-interactive --format json auth status --live
 ```
 
 输出：
@@ -1137,7 +1146,7 @@ jqcli --env-file .env --format json community clone-strategy <post_id> --backtes
 
 受控真实验收随后用独占临时会话执行了 `1 + 1`：WebSocket 执行状态为 `ok`，结果为 `2`；执行前后 `kernels` 与 `sessions` 数量均为 `0`。该验收没有读取或保存 Notebook，也没有连接现有内核。`exec`/`run` 的临时会话使用高熵合成路径，Jupyter Session API 只建立内存会话；即使创建响应丢失，jqcli 也只会按该精确合成路径找回并清理自己的会话。
 
-研究命令需要 Cookie 登录态；只有 Bearer token 时请先执行：
+研究命令需要 Cookie 登录态；已配置账号密码时会自动取得 Cookie。也可以先显式登录：
 
 ```bash
 jqcli --env-file .env --format json auth login

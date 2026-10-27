@@ -9,7 +9,7 @@ from rich.table import Table
 from jqcli.api.client import ApiClient
 from jqcli.api.community import check_strategy_clone, clone_strategy, get_post_detail, iter_latest_posts, list_latest_posts
 from jqcli.cli import AppContext
-from jqcli.errors import NotAuthenticatedError
+from jqcli.authentication import ensure_authentication
 from jqcli.output import write_json, write_json_line
 
 
@@ -19,12 +19,12 @@ def community_group() -> None:
 
 
 def make_client(app: AppContext) -> ApiClient:
+    ensure_authentication(app, required=False)
     return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 
 def make_authenticated_client(app: AppContext) -> ApiClient:
-    if not (app.token or app.cookie):
-        raise NotAuthenticatedError()
+    ensure_authentication(app)
     return make_client(app)
 
 

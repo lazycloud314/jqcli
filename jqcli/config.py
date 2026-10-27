@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -126,7 +127,34 @@ def load_config(path: str | Path | None = None) -> Config:
 def resolve_credentials(config: Config, token: str | None = None, cookie: str | None = None) -> tuple[str | None, str | None]:
     resolved_token = os.environ.get("JQCLI_TOKEN") or token or config.token
     resolved_cookie = os.environ.get("JQCLI_COOKIE") or cookie or config.cookie
+    superseded = config.data.get("superseded_cookie_fingerprints", [])
+    if (
+        resolved_cookie and config.cookie and isinstance(superseded, list)
+        and _cookie_fingerprint(resolved_cookie) in superseded
+    ):
+        resolved_cookie = config.cookie
     return resolved_token, resolved_cookie
+
+
+def _cookie_fingerprint(cookie: str) -> str:
+    return hashlib.sha256(cookie.encode("utf-8")).hexdigest()
+
+
+def save_login_credentials(config: Config, *, username: str, cookie: str, previous_cookie: str | None = None) -> None:
+    """Remember replaced cookies by digest so stale env values cannot undo login."""
+    superseded = config.data.get("superseded_cookie_fingerprints", [])
+    if not isinstance(superseded, list):
+        superseded = []
+    superseded = [value for value in superseded if isinstance(value, str)]
+    if previous_cookie and previous_cookie != cookie:
+        fingerprint = _cookie_fingerprint(previous_cookie)
+        superseded = [value for value in superseded if value != fingerprint] + [fingerprint]
+    config.data["username"] = username
+    config.data["cookie"] = cookie
+    if superseded:
+        config.data["superseded_cookie_fingerprints"] = superseded[-16:]
+    config.data.pop("password_login_pending", None)
+    config.save()
 
 
 def resolve_login_credentials(username: str | None = None, password: str | None = None) -> tuple[str | None, str | None]:

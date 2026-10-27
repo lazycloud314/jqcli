@@ -28,10 +28,10 @@ from jqcli.api.research_execution import (
     list_research_sessions,
     run_research_notebook,
 )
+from jqcli.authentication import ensure_authentication
 from jqcli.errors import (
     ConfirmationRequiredError,
     FileError,
-    NotAuthenticatedError,
     NotFoundError,
     UsageError,
 )
@@ -52,8 +52,7 @@ def research_group() -> None:
 
 
 def make_client(app: AppContext) -> ApiClient:
-    if not app.cookie:
-        raise NotAuthenticatedError("研究平台需要有效 cookie；请执行 auth login 或提供 JQCLI_COOKIE")
+    ensure_authentication(app, cookie_only=True)
     return ApiClient(app.api_base, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 

@@ -9,7 +9,8 @@ import click
 from jqcli.api.auth import login_with_password
 from jqcli.api.diagnostics import credential_fingerprint
 from jqcli.cli import AppContext
-from jqcli.config import resolve_login_credentials
+from jqcli.authentication import ensure_authentication
+from jqcli.config import resolve_credentials, resolve_login_credentials, save_login_credentials
 from jqcli.errors import UsageError
 from jqcli.output import write_json
 
@@ -20,8 +21,11 @@ def auth_group() -> None:
 
 
 @auth_group.command("status")
+@click.option("--live", is_flag=True, help="在线校验登录态；过期时尝试自动登录")
 @click.pass_obj
-def status(app: AppContext) -> None:
+def status(app: AppContext, live: bool) -> None:
+    if live:
+        ensure_authentication(app)
     authenticated = bool(app.token or app.cookie)
     payload = {
         "authenticated": authenticated,
@@ -43,6 +47,7 @@ def logout(app: AppContext) -> None:
     app.config.data.pop("token", None)
     app.config.data.pop("cookie", None)
     app.config.data.pop("username", None)
+    app.config.data.pop("superseded_cookie_fingerprints", None)
     app.config.save()
     if app.json_output:
         write_json({"ok": True})
@@ -88,10 +93,7 @@ def login(app: AppContext, username: str | None, password_stdin: bool) -> None:
     if not password:
         raise UsageError("缺少密码，请传入 --password-stdin 或在 env 文件中设置 JQCLI_PASSWORD")
     result = login_with_password(app.api_base, username, password, timeout=app.timeout)
-    app.config.data["username"] = username
-    app.config.data["cookie"] = result["cookie"]
-    app.config.data.pop("password_login_pending", None)
-    app.config.save()
+    save_login_credentials(app.config, username=username, cookie=result["cookie"], previous_cookie=app.cookie)
     if app.debug:
         print(json.dumps({"debug": {
             "event": "login_saved",
@@ -99,7 +101,9 @@ def login(app: AppContext, username: str | None, password_stdin: bool) -> None:
             "saved_cookie_present": bool(app.config.cookie),
             "saved_cookie_fingerprint": credential_fingerprint(app.config.cookie),
             "saved_token_present": bool(app.config.token),
-            "environment_cookie_overrides_saved_cookie": bool(os.environ.get("JQCLI_COOKIE")),
+            "environment_cookie_overrides_saved_cookie": bool(
+                os.environ.get("JQCLI_COOKIE") and resolve_credentials(app.config)[1] != app.config.cookie
+            ),
             "environment_token_present": bool(os.environ.get("JQCLI_TOKEN")),
         }}, ensure_ascii=False), file=sys.stderr, flush=True)
     if app.json_output:

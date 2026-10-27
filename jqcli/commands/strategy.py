@@ -14,7 +14,8 @@ from jqcli.api.strategy import (
     list_strategies, list_strategy_folders, move_strategy, update_strategy,
 )
 from jqcli.cli import AppContext
-from jqcli.errors import ConfirmationRequiredError, FileError, NotAuthenticatedError, UsageError
+from jqcli.authentication import ensure_authentication
+from jqcli.errors import ConfirmationRequiredError, FileError, UsageError
 from jqcli.output import write_json
 
 
@@ -33,8 +34,7 @@ def strategy_group() -> None:
 
 
 def make_client(app: AppContext) -> ApiClient:
-    if not (app.token or app.cookie):
-        raise NotAuthenticatedError()
+    ensure_authentication(app)
     return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 

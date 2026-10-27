@@ -18,7 +18,8 @@ from jqcli.api.backtest import (
     run_backtest,
 )
 from jqcli.api.client import ApiClient
-from jqcli.errors import ConfirmationRequiredError, NotAuthenticatedError, TimeoutError
+from jqcli.authentication import ensure_authentication
+from jqcli.errors import ConfirmationRequiredError, TimeoutError
 from jqcli.output import write_json
 
 
@@ -36,12 +37,12 @@ def backtest_group() -> None:
 
 
 def make_client(app: AppContext) -> ApiClient:
-    if not (app.token or app.cookie):
-        raise NotAuthenticatedError()
+    ensure_authentication(app)
     return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 
 def make_optional_client(app: AppContext) -> ApiClient:
+    ensure_authentication(app, required=False)
     return ApiClient(app.api_base, token=app.token, cookie=app.cookie, timeout=app.timeout, debug=app.debug)
 
 

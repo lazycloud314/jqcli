@@ -27,6 +27,7 @@ def test_strategy_debug_reports_unknown_page_without_false_empty_list(monkeypatc
         ))
 
     monkeypatch.setattr("jqcli.commands.strategy.ApiClient", make_client)
+    monkeypatch.setattr("jqcli.authentication.ApiClient", make_client)
     result = CliRunner().invoke(main, [
         "--config", str(tmp_path / "c.json"), "--env-file", "/dev/null",
         "--token", "private-token", "--format", "json", "--debug", "strategy", "ls",

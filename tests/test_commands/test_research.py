@@ -49,6 +49,7 @@ def test_research_make_client_uses_cookie_without_bearer_token(monkeypatch, tmp_
             captured.update(kwargs)
 
     monkeypatch.setattr("jqcli.commands.research.ApiClient", CapturingClient)
+    monkeypatch.setattr("jqcli.authentication._probe_login", lambda app, **kwargs: kwargs["cookie"])
     monkeypatch.setattr("jqcli.commands.research.list_research_items", lambda client, path="": {"items": []})
 
     result = CliRunner().invoke(

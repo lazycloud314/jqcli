@@ -141,7 +141,7 @@ def test_login_debug_reports_saved_cookie_and_override_risks(monkeypatch, tmp_pa
     saved = events[1]
     assert saved["saved_cookie_present"] is True
     assert saved["saved_token_present"] is True
-    assert saved["environment_cookie_overrides_saved_cookie"] is True
+    assert saved["environment_cookie_overrides_saved_cookie"] is False
     assert saved["saved_cookie_fingerprint"] != events[0]["credentials"]["cookie"]["fingerprint"]
     assert all(value not in result.stderr for value in (
         "new-private-cookie", "old-private-cookie", "old-private-token", "private-user", "private-password",

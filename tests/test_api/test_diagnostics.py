@@ -146,7 +146,8 @@ def test_command_clients_emit_requested_debug(module_name, factory_name, monkeyp
         ))
     monkeypatch.setattr(module, "ApiClient", make_test_client)
     app = SimpleNamespace(api_base="https://example.test", token="private-token",
-                          cookie="sid=private-cookie", timeout=10, debug=True)
+                          cookie="sid=private-cookie", timeout=10, debug=True,
+                          authentication_checked=True)
     with getattr(module, factory_name)(app) as client:
         client.get("/test")
     output = capsys.readouterr().err

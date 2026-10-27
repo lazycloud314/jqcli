@@ -37,6 +37,10 @@ def runtime_summary(
         except OSError:
             hashes[relative] = "unavailable"
     target = urlsplit(api_base)
+    cookie_source = _credential_source("JQCLI_COOKIE", cli_cookie, config.cookie, env_before)
+    external_cookie = os.environ.get("JQCLI_COOKIE") or cli_cookie
+    if external_cookie and cookie == config.cookie and cookie != external_cookie:
+        cookie_source = "refreshed_config_file"
     # No URL user info, path, query, username, password, or environment contents.
     return {
         "event": "runtime",
@@ -66,7 +70,7 @@ def runtime_summary(
             },
             "cookie": {
                 "present": bool(cookie),
-                "source": _credential_source("JQCLI_COOKIE", cli_cookie, config.cookie, env_before),
+                "source": cookie_source,
                 "fingerprint": credential_fingerprint(cookie),
             },
             "both_token_and_cookie": bool(token and cookie),
