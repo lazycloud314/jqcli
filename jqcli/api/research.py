@@ -132,11 +132,11 @@ def delete_research_item(client: ApiClient, path: str) -> None:
 
 def _bootstrap_research(client: ApiClient) -> str:
     script = client.get_text("/default/research/redirect")
-    mob, session_id, login_url = _parse_sso_script(script)
+    mob, session_id, login_url = _parse_sso_script(script, details=client.last_response_details)
     validated_login_url = _validate_sso_url(client.api_base, login_url)
 
     login_html = _submit_sso_login(client, validated_login_url, mob=mob, session_id=session_id)
-    return _parse_base_path(login_html)
+    return _parse_base_path(login_html, details=client.last_response_details)
 
 
 def _submit_sso_login(client: ApiClient, login_url: str, *, mob: str, session_id: str) -> str:
@@ -169,7 +169,7 @@ def _submit_sso_login(client: ApiClient, login_url: str, *, mob: str, session_id
     raise ApiError("研究平台登录重定向次数过多")
 
 
-def _parse_sso_script(script: str) -> tuple[str, str, str]:
+def _parse_sso_script(script: str, *, details: dict[str, Any] | None = None) -> tuple[str, str, str]:
     try:
         mob = _extract_js_assignment(script, "mob")
         session_id = _extract_js_assignment(script, "sessionId")
@@ -190,7 +190,7 @@ def _parse_sso_script(script: str) -> tuple[str, str, str]:
     except (TypeError, ValueError):
         # Never include the script: it contains the user's login identifier and
         # one-time SSO token.
-        raise NotAuthenticatedError("无法获取有效的研究平台登录信息") from None
+        raise NotAuthenticatedError("无法获取有效的研究平台登录信息", details=details) from None
     return mob, session_id, login_url
 
 
@@ -304,14 +304,17 @@ def _url_origin(parsed: Any) -> tuple[str, str, int | None]:
     return scheme, hostname, port
 
 
-def _parse_base_path(html: str) -> str:
+def _parse_base_path(html: str, *, details: dict[str, Any] | None = None) -> str:
     parser = _BaseUrlParser()
     try:
         parser.feed(html)
     except (TypeError, ValueError):
-        raise NotAuthenticatedError("无法建立研究平台登录会话") from None
+        raise NotAuthenticatedError("无法建立研究平台登录会话", details=details) from None
     if len(parser.values) != 1:
-        raise NotAuthenticatedError("无法建立研究平台登录会话")
+        raise NotAuthenticatedError(
+            "无法建立研究平台登录会话",
+            details={**(details or {}), "base_url_count": len(parser.values)},
+        )
 
     value = unescape(parser.values[0])
     try:
